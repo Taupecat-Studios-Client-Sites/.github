@@ -114,11 +114,22 @@ jobs:
       if: ${{ inputs.build_frontend }}
       run: sudo chown -R runner:docker web
 
+    - name: Determine Node version
+      id: node-version
+      if: ${{ inputs.build_frontend }}
+      run: |
+        NVMRC="web/wp-content/themes/${{ vars.THEME_DIR }}/src/.nvmrc"
+        if [ -n "${{ vars.THEME_DIR }}" ] && [ -f "$NVMRC" ]; then
+          echo "version=$(cat $NVMRC)" >> $GITHUB_OUTPUT
+        else
+          echo "version=lts/*" >> $GITHUB_OUTPUT
+        fi
+
     - name: Installing Node
       if: ${{ inputs.build_frontend }}
       uses: actions/setup-node@v6
       with:
-        node-version-file: web/wp-content/themes/${{ vars.THEME_DIR }}/src/.nvmrc
+        node-version: ${{ steps.node-version.outputs.version }}
 
     - name: Install Node dependencies
       if: ${{ inputs.build_frontend }}
@@ -145,7 +156,7 @@ jobs:
         fi
 
     - name: Rsync from web to Pantheon
-      run: rsync -cvzrim --del --exclude=wp-content/uploads --exclude=wp-content/themes/${{ vars.THEME_DIR }}/src web pantheon.yml wp-cli.yml ~/pantheon-local-copies/${{ vars.PANTHEON_SITE_NAME }}
+      run: rsync -cvzrim --del --exclude-from=exclusions.txt web pantheon.yml wp-cli.yml ~/pantheon-local-copies/${{ vars.PANTHEON_SITE_NAME }}
 
     - name: Commit and push changes
       env:
