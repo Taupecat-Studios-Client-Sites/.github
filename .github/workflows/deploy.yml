@@ -14,6 +14,11 @@ on:
         required: false
         type: boolean
         default: true
+      src_dir:
+        description: "Path to the src directory containing package.json and optionally .nvmrc. Defaults to web/wp-content/themes/<THEME_DIR>/src."
+        required: false
+        type: string
+        default: ""
 
 jobs:
   build:
@@ -114,12 +119,25 @@ jobs:
       if: ${{ inputs.build_frontend }}
       run: sudo chown -R runner:docker web
 
+    - name: Resolve src directory
+      id: resolve-src
+      if: ${{ inputs.build_frontend }}
+      run: |
+        if [ -n "${{ inputs.src_dir }}" ]; then
+          echo "path=${{ inputs.src_dir }}" >> $GITHUB_OUTPUT
+        elif [ -n "${{ vars.THEME_DIR }}" ]; then
+          echo "path=web/wp-content/themes/${{ vars.THEME_DIR }}/src" >> $GITHUB_OUTPUT
+        else
+          echo "::error::build_frontend is true but neither src_dir input nor THEME_DIR variable is set."
+          exit 1
+        fi
+
     - name: Determine Node version
       id: node-version
       if: ${{ inputs.build_frontend }}
       run: |
-        NVMRC="web/wp-content/themes/${{ vars.THEME_DIR }}/src/.nvmrc"
-        if [ -n "${{ vars.THEME_DIR }}" ] && [ -f "$NVMRC" ]; then
+        NVMRC="${{ steps.resolve-src.outputs.path }}/.nvmrc"
+        if [ -f "$NVMRC" ]; then
           echo "version=$(cat $NVMRC)" >> $GITHUB_OUTPUT
         else
           echo "version=lts/*" >> $GITHUB_OUTPUT
@@ -133,12 +151,12 @@ jobs:
 
     - name: Install Node dependencies
       if: ${{ inputs.build_frontend }}
-      working-directory: web/wp-content/themes/${{ vars.THEME_DIR }}/src
+      working-directory: ${{ steps.resolve-src.outputs.path }}
       run: npm ci
 
     - name: Build theme assets
       if: ${{ inputs.build_frontend }}
-      working-directory: web/wp-content/themes/${{ vars.THEME_DIR }}/src
+      working-directory: ${{ steps.resolve-src.outputs.path }}
       run: npm run build
 
     # Deploy the site to Pantheon.
