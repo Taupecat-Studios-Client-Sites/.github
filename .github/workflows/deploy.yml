@@ -1,0 +1,181 @@
+name: Deploy to Pantheon
+
+on:
+  workflow_call:
+    inputs:
+      pantheon_branch:
+        required: true
+        type: string
+      deploy_to_test:
+        required: false
+        type: boolean
+        default: false
+      build_frontend:
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+
+    # Install Terminus and check out the Pantheon repository.
+
+    - name: Set up SSH key
+      uses: webfactory/ssh-agent@v0.10.0
+      with:
+        ssh-private-key: ${{ secrets.PANTHEON_SSH_KEY }}
+
+    - name: Configure SSH for Pantheon
+      run: |
+        echo "Host *.drush.in" >> ~/.ssh/config
+        echo "    StrictHostKeyChecking no" >> ~/.ssh/config
+
+    - name: Setup PHP
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: "8.3"
+
+    - name: Install Terminus
+      run: |
+        TERMINUS_VERSION=$(
+          curl --silent \
+            --header "authorization: Bearer ${{ github.token }}" \
+            "https://api.github.com/repos/pantheon-systems/terminus/releases/latest" \
+            | perl -nle'print $& while m#"tag_name": "\K[^"]*#g'
+        )
+        mkdir -p $HOME/terminus $HOME/.terminus/cache $HOME/.terminus/plugins
+        curl -L "https://github.com/pantheon-systems/terminus/releases/download/${TERMINUS_VERSION}/terminus.phar" \
+          --output $HOME/terminus/terminus
+        chmod +x $HOME/terminus/terminus
+        sudo ln -s $HOME/terminus/terminus /usr/local/bin/terminus
+
+    - name: Restore Terminus session cache
+      uses: actions/cache@v5
+      with:
+        path: ${{ runner.temp }}/terminus-session.enc
+        key: terminus-session-${{ github.run_id }}
+        restore-keys: terminus-session-
+        enableCrossOsArchive: true
+
+    - name: Authenticate Terminus
+      run: |
+        SESSION_ENC="${{ runner.temp }}/terminus-session.enc"
+        if [[ -s "$SESSION_ENC" ]]; then
+          if echo "${{ secrets.PANTHEON_MACHINE_TOKEN }}" | \
+              openssl enc -d -aes-256-cbc -pbkdf2 -iter 10000 -pass stdin \
+              -in "$SESSION_ENC" -out $HOME/.terminus/cache/session 2>/dev/null; then
+            TERMINUS_USER=$(terminus auth:whoami 2>/dev/null || true)
+            if [[ -n "$TERMINUS_USER" ]]; then
+              echo "Restored Terminus session: $TERMINUS_USER"
+              exit 0
+            fi
+          fi
+          echo "Cached session invalid, re-authenticating..."
+        fi
+        terminus auth:login --machine-token="${{ secrets.PANTHEON_MACHINE_TOKEN }}"
+        echo "${{ secrets.PANTHEON_MACHINE_TOKEN }}" | \
+          openssl enc -aes-256-cbc -salt -pbkdf2 -iter 10000 -pass stdin \
+          -in $HOME/.terminus/cache/session \
+          -out "$SESSION_ENC"
+
+    - name: Check out Pantheon repository
+      run: |
+        terminus local:clone ${{ vars.PANTHEON_SITE_NAME }} --branch=${{ inputs.pantheon_branch }} &
+        echo "PANTHEON_CLONE_PID=$!" >> $GITHUB_ENV
+
+    # Check out the GitHub repository.
+
+    - name: Check out GitHub repository
+      uses: actions/checkout@v6
+
+    - name: Get commit message
+      id: get-commit-message
+      run: echo "COMMIT_MESSAGE=$(git log -1 --oneline)" >> "$GITHUB_OUTPUT"
+
+    # Build the site.
+
+    - name: Composer credentials
+      run: |
+        echo "$AUTH_JSON" > $GITHUB_WORKSPACE/auth.json
+        echo "$ENV" > $GITHUB_WORKSPACE/.env
+      env:
+        AUTH_JSON: ${{ secrets.AUTH_JSON }}
+        ENV: ${{ secrets.ENV }}
+
+    - name: Composer install
+      uses: ramsey/composer-install@4.0.0
+      with:
+        composer-options: "--no-dev --ignore-platform-reqs"
+
+    - name: Set proper directory ownership
+      if: ${{ inputs.build_frontend }}
+      run: sudo chown -R runner:docker web
+
+    - name: Installing Node
+      if: ${{ inputs.build_frontend }}
+      uses: actions/setup-node@v6
+      with:
+        node-version-file: web/wp-content/themes/${{ vars.THEME_DIR }}/src/.nvmrc
+
+    - name: Install Node dependencies
+      if: ${{ inputs.build_frontend }}
+      working-directory: web/wp-content/themes/${{ vars.THEME_DIR }}/src
+      run: npm ci
+
+    - name: Build theme assets
+      if: ${{ inputs.build_frontend }}
+      working-directory: web/wp-content/themes/${{ vars.THEME_DIR }}/src
+      run: npm run build
+
+    # Deploy the site to Pantheon.
+
+    - name: Wait for Pantheon clone to finish
+      run: |
+        if ps -p $PANTHEON_CLONE_PID > /dev/null 2>&1; then
+          echo "Pantheon clone is still running. Waiting..."
+          while ps -p $PANTHEON_CLONE_PID > /dev/null 2>&1; do
+            sleep 1
+          done
+          echo "Pantheon clone has finished."
+        else
+          echo "Pantheon clone has finished."
+        fi
+
+    - name: Rsync from web to Pantheon
+      run: rsync -cvzrim --del --exclude=wp-content/uploads --exclude=wp-content/themes/${{ vars.THEME_DIR }}/src web pantheon.yml wp-cli.yml ~/pantheon-local-copies/${{ vars.PANTHEON_SITE_NAME }}
+
+    - name: Commit and push changes
+      env:
+        COMMIT_MESSAGE: ${{ steps.get-commit-message.outputs.COMMIT_MESSAGE }}
+      run: |
+        cd ~/pantheon-local-copies/${{ vars.PANTHEON_SITE_NAME }}
+        git config user.name "Tracy Rotton"
+        git config user.email "trotton@taupecatstudios.com"
+        git add -A
+        if git diff-index --quiet HEAD --; then
+          echo "No changes to commit."
+        else
+          git commit -m "$COMMIT_MESSAGE"
+          echo "Changes committed."
+          git push origin ${{ inputs.pantheon_branch }}
+        fi
+
+    - name: Push changes to Test environment
+      if: ${{ inputs.deploy_to_test }}
+      env:
+        COMMIT_MESSAGE: ${{ steps.get-commit-message.outputs.COMMIT_MESSAGE }}
+      run: terminus env:deploy ${{ vars.PANTHEON_SITE_NAME }}.test --note "$COMMIT_MESSAGE"
+
+    # Slack notifications.
+
+    - name: Notify if Failure
+      if: failure()
+      uses: slackapi/slack-github-action@v3.0.1
+      with:
+        webhook: ${{ secrets.ACTION_MONITORING_SLACK }}
+        webhook-type: incoming-webhook
+        payload: |
+          text: ":x: *${{ github.workflow }}* failed on `${{ github.ref_name }}` — <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
