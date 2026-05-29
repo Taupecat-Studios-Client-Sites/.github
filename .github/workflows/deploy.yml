@@ -29,6 +29,11 @@ on:
         required: false
         type: string
         default: ""
+      legacy_peer_deps:
+        description: "Pass --legacy-peer-deps to npm ci. Use for sites with unresolved peer dependency conflicts."
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -167,7 +172,7 @@ jobs:
     - name: Install Node dependencies
       if: ${{ inputs.build_frontend }}
       working-directory: ${{ steps.resolve-src.outputs.path }}
-      run: npm ci
+      run: npm ci ${{ inputs.legacy_peer_deps && '--legacy-peer-deps' || '' }}
 
     - name: Build theme assets
       if: ${{ inputs.build_frontend }}
