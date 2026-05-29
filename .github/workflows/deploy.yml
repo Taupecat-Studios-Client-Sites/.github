@@ -24,6 +24,11 @@ on:
         required: false
         type: string
         default: ""
+      extra_exclusions:
+        description: "Additional rsync exclusions, one per line. Added on top of the default exclusions (.DS_Store, wp-content/uploads)."
+        required: false
+        type: string
+        default: ""
 
 jobs:
   build:
@@ -186,7 +191,7 @@ jobs:
     - name: Build exclusions list
       run: |
         printf '%s' "$DEFAULT_EXCLUSIONS" > /tmp/exclusions.txt
-        [ -f exclusions.txt ] && cat exclusions.txt >> /tmp/exclusions.txt || true
+        [ -n "${{ inputs.extra_exclusions }}" ] && printf '%s\n' "${{ inputs.extra_exclusions }}" >> /tmp/exclusions.txt || true
 
     - name: Rsync to Pantheon (web docroot)
       if: ${{ inputs.web_docroot }}
