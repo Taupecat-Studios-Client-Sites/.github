@@ -29,6 +29,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    env:
+      DEFAULT_EXCLUSIONS: |
+        .DS_Store
+        wp-content/uploads
+
     steps:
 
     # Install Terminus and check out the Pantheon repository.
@@ -178,13 +183,18 @@ jobs:
           echo "Pantheon clone has finished."
         fi
 
+    - name: Build exclusions list
+      run: |
+        printf '%s' "$DEFAULT_EXCLUSIONS" > /tmp/exclusions.txt
+        [ -f exclusions.txt ] && cat exclusions.txt >> /tmp/exclusions.txt || true
+
     - name: Rsync to Pantheon (web docroot)
       if: ${{ inputs.web_docroot }}
-      run: rsync -cvzrim --del --exclude-from=exclusions.txt --exclude=wp-content/themes/${{ vars.THEME_DIR }}/src web pantheon.yml wp-cli.yml ~/pantheon-local-copies/${{ vars.PANTHEON_SITE_NAME }}
+      run: rsync -cvzrim --del --exclude-from=/tmp/exclusions.txt --exclude=wp-content/themes/${{ vars.THEME_DIR }}/src web pantheon.yml wp-cli.yml ~/pantheon-local-copies/${{ vars.PANTHEON_SITE_NAME }}
 
     - name: Rsync to Pantheon (no web docroot)
       if: ${{ !inputs.web_docroot }}
-      run: rsync -cvzrim --del --exclude-from=exclusions.txt --exclude=wp-content/themes/${{ vars.THEME_DIR }}/src web/ ~/pantheon-local-copies/${{ vars.PANTHEON_SITE_NAME }}/
+      run: rsync -cvzrim --del --exclude-from=/tmp/exclusions.txt --exclude=wp-content/themes/${{ vars.THEME_DIR }}/src web/ ~/pantheon-local-copies/${{ vars.PANTHEON_SITE_NAME }}/
 
     - name: Commit and push changes
       env:
