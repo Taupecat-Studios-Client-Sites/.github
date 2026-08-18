@@ -131,14 +131,45 @@ jobs:
         ENV: ${{ secrets.ENV }}
 
     # The GitHub-hosted Ubuntu runner images no longer ship Subversion, which
-    # Composer needs for any package sourced from an SVN repository.
+    # Composer needs for any package sourced from an SVN repository. Most sites
+    # never touch SVN, so skip the install entirely unless composer.json or
+    # composer.lock actually references an svn source. When it is needed, build
+    # a throwaway sources list pointing at just the release suite's main and
+    # universe components: a bare `apt-get update` refreshes every repo on the
+    # runner image (~100+ index files, including the third-party ones), and
+    # that -- not the install -- is what takes minutes.
 
     - name: Install Subversion
       run: |
-        if ! command -v svn >/dev/null 2>&1; then
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends subversion
+        if command -v svn >/dev/null 2>&1; then
+          echo "Subversion already installed."
+          exit 0
         fi
+
+        if ! grep -qE '"type"[[:space:]]*:[[:space:]]*"svn"' composer.json composer.lock 2>/dev/null; then
+          echo "No SVN-sourced packages found; skipping Subversion install."
+          exit 0
+        fi
+
+        APT_OPTS=(-o Acquire::Languages=none -o Acquire::Retries=3)
+
+        MIRROR=$(grep -hm1 -oE 'https?://[^ ]+' \
+          /etc/apt/sources.list.d/ubuntu.sources /etc/apt/sources.list 2>/dev/null | head -n1)
+        CODENAME=$(lsb_release -cs 2>/dev/null || true)
+
+        if [[ -n "$MIRROR" && -n "$CODENAME" ]]; then
+          PARTS=$(mktemp -d)
+          echo "deb $MIRROR $CODENAME main universe" > "$PARTS/ubuntu.list"
+          APT_OPTS+=(-o Dir::Etc::sourcelist=/dev/null
+                     -o Dir::Etc::sourceparts="$PARTS"
+                     -o APT::Get::List-Cleanup=0
+                     -o Acquire::IndexTargets::deb::DEP-11::DefaultEnabled=false)
+        else
+          echo "Could not determine archive mirror; falling back to a full apt update."
+        fi
+
+        sudo apt-get update "${APT_OPTS[@]}"
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends subversion
         svn --version --quiet
 
     - name: Composer install
