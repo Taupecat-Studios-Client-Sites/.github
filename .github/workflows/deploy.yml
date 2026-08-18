@@ -130,6 +130,17 @@ jobs:
         AUTH_JSON: ${{ secrets.AUTH_JSON }}
         ENV: ${{ secrets.ENV }}
 
+    # The GitHub-hosted Ubuntu runner images no longer ship Subversion, which
+    # Composer needs for any package sourced from an SVN repository.
+
+    - name: Install Subversion
+      run: |
+        if ! command -v svn >/dev/null 2>&1; then
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends subversion
+        fi
+        svn --version --quiet
+
     - name: Composer install
       uses: ramsey/composer-install@4.0.0
       with:
