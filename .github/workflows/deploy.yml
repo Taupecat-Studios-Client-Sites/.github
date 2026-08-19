@@ -131,14 +131,38 @@ jobs:
         ENV: ${{ secrets.ENV }}
 
     # The GitHub-hosted Ubuntu runner images no longer ship Subversion, which
-    # Composer needs for any package sourced from an SVN repository.
+    # Composer needs for any package sourced from an SVN repository. Most sites
+    # do not use one, so check before paying for the install at all. The runner
+    # image ships usable apt lists for the release suite, which is where
+    # subversion lives, so try installing directly -- a bare `apt-get update`
+    # refreshes every repo on the image (11 MB, ~80s on a slow mirror) and none
+    # of that is needed here. Only refresh if the cached lists turn out stale.
 
     - name: Install Subversion
       run: |
-        if ! command -v svn >/dev/null 2>&1; then
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends subversion
+        if command -v svn >/dev/null 2>&1; then
+          echo "Subversion already installed."
+          exit 0
         fi
+
+        if ! grep -qE '"type"[[:space:]]*:[[:space:]]*"svn"' composer.json composer.lock 2>/dev/null; then
+          echo "No SVN-sourced packages found; skipping Subversion install."
+          exit 0
+        fi
+
+        # NEEDRESTART_MODE=l keeps apt from bouncing unrelated services
+        # (php-fpm) after unpacking.
+        apt_install() {
+          sudo NEEDRESTART_MODE=l DEBIAN_FRONTEND=noninteractive \
+            apt-get install -y --no-install-recommends subversion
+        }
+
+        if ! apt_install; then
+          echo "Cached package lists were not usable; refreshing and retrying."
+          sudo apt-get update
+          apt_install
+        fi
+
         svn --version --quiet
 
     - name: Composer install
