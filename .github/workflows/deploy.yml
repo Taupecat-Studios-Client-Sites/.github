@@ -168,7 +168,7 @@ jobs:
     - name: Composer install
       uses: ramsey/composer-install@4.0.0
       with:
-        composer-options: "--no-dev --ignore-platform-reqs"
+        composer-options: "--no-dev"
 
     - name: Set proper directory ownership
       if: ${{ inputs.build_frontend }}
