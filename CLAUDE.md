@@ -27,8 +27,10 @@ To cut a release, publish a GitHub Release with a `vX.Y.Z` tag; the alias moves 
 Consuming repos reference this workflow with:
 
 ```yaml
-uses: <org>/<this-repo>/.github/workflows/deploy.yml@main
+uses: Taupecat-Studios-Client-Sites/.github/.github/workflows/deploy.yml@v1
 ```
+
+The doubled `.github` is correct: this repo is named `.github`, and the workflow sits at `.github/workflows/deploy.yml` within it. Consumers pin a tag (`@v1`), not `@main` — see Versioning below.
 
 Required inputs:
 - `pantheon_branch` — the Pantheon Git branch to deploy to (e.g. `master`, `dev`)

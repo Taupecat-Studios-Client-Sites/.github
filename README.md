@@ -9,11 +9,13 @@ In your downstream repo's workflow file:
 ```yaml
 jobs:
   deploy:
-    uses: <org>/<this-repo>/.github/workflows/deploy.yml@v1
+    uses: Taupecat-Studios-Client-Sites/.github/.github/workflows/deploy.yml@v1
     with:
       pantheon_branch: master
     secrets: inherit
 ```
+
+> The doubled `.github` is correct, not a typo. This repository is *named* `.github`, and the workflow lives at `.github/workflows/deploy.yml` inside it — so the path reads `<owner>/<repo>/<path>`, or `Taupecat-Studios-Client-Sites` / `.github` / `.github/workflows/deploy.yml`.
 
 Pantheon allows one `sync_code` workflow per site at a time, so also add a `concurrency` block in the calling workflow if several of its own jobs can deploy at once. The reusable workflow already serializes per site and branch on its side.
 
@@ -70,8 +72,8 @@ git log -1 --pretty='%(trailers:key=Source-Commit,valueonly=true)'
 
 ```yaml
 # in the SITE's repo, e.g. .github/workflows/deploy.yml
-    uses: <org>/<this-repo>/.github/workflows/deploy.yml@v1
-    #     └──── this repo ─────┘                         └─ a tag in THIS repo
+    uses: Taupecat-Studios-Client-Sites/.github/.github/workflows/deploy.yml@v1
+    #     └────────────── this repo ──────────┘                              └─ a tag in THIS repo
 ```
 
 So releases are cut here, once, and each site gets a one-line `@ref` edit. A site never tags anything for this — its own tags and releases, if it has them, are unrelated.
