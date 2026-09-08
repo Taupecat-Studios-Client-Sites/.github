@@ -83,7 +83,7 @@ Releases here are tagged `vX.Y.Z`, and a floating `vX` alias is moved forward to
 | Pin | Behavior |
 |-----|----------|
 | `@v1` | **Recommended.** Picks up fixes and new optional inputs; never a breaking change. |
-| `@v1.2.3` | Fully reproducible. Use where a deploy must not change until someone bumps it. |
+| `@v1.0.1` | Fully reproducible. Use where a deploy must not change until someone bumps it. |
 | `@main` | Unpinned — every merge here ships to your site on the next deploy, with no release notes. Avoid. |
 
 A major bump means one of: an input removed or renamed, an optional input made required, a new required secret or repo variable, or a changed default that alters how an existing caller deploys. New optional inputs and internal changes that leave deploy behavior intact are minor or patch.
