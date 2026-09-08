@@ -45,6 +45,32 @@ jobs:
         tar xzf "$ARCHIVE" actionlint
         ./actionlint --version
 
-    # No path argument: lints every workflow in .github/workflows, this one included.
+    # actionlint shells out to whatever shellcheck it finds, and the runner
+    # image's version drifts. Two versions disagree about real findings -- 0.11.0
+    # stopped flagging `cmd || true` as SC2015, for one -- so an unpinned CI both
+    # disagrees with a developer's local run and can start failing on its own when
+    # GitHub bumps the image. Pin it, and document the same version for local use.
+    - name: Install shellcheck
+      env:
+        SHELLCHECK_VERSION: "0.11.0"
+        # shellcheck publishes no checksums file, so this digest was computed
+        # from the release asset and is pinned here. Update it with the version.
+        SHELLCHECK_SHA256: "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198"
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        ARCHIVE="shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+
+        gh release download "v${SHELLCHECK_VERSION}" \
+          --repo koalaman/shellcheck \
+          --pattern "$ARCHIVE"
+
+        echo "${SHELLCHECK_SHA256}  ${ARCHIVE}" | sha256sum --check --strict
+
+        tar xJf "$ARCHIVE" --strip-components=1 \
+          "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
+        ./shellcheck --version
+
+    # No path argument: lints every workflow in .github/workflows, this one
+    # included. -shellcheck points at the pinned binary rather than the image's.
     - name: Run actionlint
-      run: ./actionlint -color
+      run: ./actionlint -color -shellcheck ./shellcheck

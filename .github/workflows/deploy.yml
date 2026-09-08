@@ -278,9 +278,13 @@ jobs:
         fi
 
     - name: Build exclusions list
+      env:
+        EXTRA_EXCLUSIONS: ${{ inputs.extra_exclusions }}
       run: |
         printf '%s' "$DEFAULT_EXCLUSIONS" > /tmp/exclusions.txt
-        [ -n "${{ inputs.extra_exclusions }}" ] && printf '%s\n' "${{ inputs.extra_exclusions }}" >> /tmp/exclusions.txt || true
+        if [ -n "$EXTRA_EXCLUSIONS" ]; then
+          printf '%s\n' "$EXTRA_EXCLUSIONS" >> /tmp/exclusions.txt
+        fi
 
     - name: Rsync to Pantheon (web docroot)
       if: ${{ inputs.web_docroot }}

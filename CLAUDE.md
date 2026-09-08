@@ -10,7 +10,8 @@ This repository contains a reusable GitHub Actions workflow (`.github/workflows/
 
 Every downstream site calls this one file, so a mistake ships to all of them at once and surfaces mid-deploy. Two consequences:
 
-- **Lint before pushing.** CI runs `actionlint` (which also runs shellcheck over `run:` blocks and validates which contexts are legal per key). To run it locally, grab the pinned binary from the [actionlint releases](https://github.com/rhysd/actionlint/releases) and run `actionlint` from the repo root with no arguments.
+- **Lint before pushing.** CI runs `actionlint` (which also runs shellcheck over `run:` blocks and validates which contexts are legal per key). Both binaries are pinned in `lint.yml` — actionlint verified against the publisher's checksums file, shellcheck against a digest recorded inline because it publishes none. To reproduce CI locally, install **the same versions `lint.yml` pins** and run `actionlint -shellcheck <path-to-pinned-shellcheck>` from the repo root with no path argument.
+  - Version skew here is not theoretical: shellcheck 0.11.0 stopped flagging `cmd || true` as SC2015, so a newer local shellcheck passes code that an older runner image rejects. That is why CI pins rather than using the image's copy — and why a local run with a mismatched shellcheck proves little. When bumping either version, bump it in `lint.yml` and update the recorded digest.
 - **Version deliberately.** See Versioning below — a breaking change needs a major bump, not a merge to `main`.
 
 ## Versioning
