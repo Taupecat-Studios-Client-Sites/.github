@@ -36,7 +36,7 @@ Required inputs:
 - `pantheon_branch` — the Pantheon Git branch to deploy to (e.g. `master`, `dev`)
 
 Optional inputs:
-- `deploy_to_test` (bool, default `false`) — promotes to Pantheon Test after pushing to Dev
+- `deploy_to_test` (bool, default `false`) — promotes to Pantheon Test after pushing to Dev, but only if the push actually happened
 - `build_frontend` (bool, default `true`) — whether to run the Node/npm build step
 - `web_docroot` (bool, default `true`) — whether the site uses a `web/` subdirectory as the Pantheon document root; when `false`, the contents of `web/` are rsynced directly into the Pantheon repo root instead
 - `src_dir` (string) — explicit path to the directory containing `package.json` and optionally `.nvmrc`; defaults to `web/wp-content/themes/<THEME_DIR>/src`
@@ -55,14 +55,15 @@ Required variable in the calling repo: `PANTHEON_SITE_NAME`. `THEME_DIR` is requ
 3. If `build_frontend` is true: resolves the `src_dir`, detects the Node version from `.nvmrc` (falls back to `lts/*`), runs `npm ci` (optionally with `--legacy-peer-deps`) and `npm run build`.
 4. Waits for the backgrounded Pantheon clone, builds the rsync exclusion list (default exclusions + `extra_exclusions`), then rsyncs `web/`, `pantheon.yml`, and `wp-cli.yml` to the Pantheon local clone — either into a `web/` subdirectory or flattened to the repo root depending on `web_docroot`. The theme `src/` directory is always excluded when `THEME_DIR` is set.
 5. Commits and pushes to the Pantheon branch, skipping the push if there's nothing to commit. The commit message is the source commit's subject plus `Source-Repo`/`Source-Ref`/`Source-Commit`/`Source-Run` git trailers.
-6. Optionally promotes to Pantheon Test via `terminus env:deploy`.
+6. Optionally promotes to Pantheon Test via `terminus env:deploy`, gated on the commit step's `pushed` output. A run whose rsync produced no change has nothing new on Dev to promote — which is every workflow-only commit in the calling repo, since only `web/`, `pantheon.yml` and `wp-cli.yml` are rsynced.
 7. Posts a Slack failure notification on any job failure.
 
 ## Key Design Notes
 
 - The job is serialized with a `concurrency` group keyed on `PANTHEON_SITE_NAME` + `pantheon_branch`, because Pantheon permits only one `sync_code` workflow per site at a time. `cancel-in-progress` is deliberately `false` — cancelling between the rsync and the push would leave the Pantheon working copy dirty for the next run.
 - Provenance travels as git trailers rather than in the commit subject or author field: the Pantheon repo holds a built artifact in its own history, so its SHAs don't exist on GitHub. The trailers survive promotion to Test and Live and are readable with `git log -1 --pretty='%(trailers:key=Source-Commit,valueonly=true)'`. The Pantheon deploy note (`--note`) gets a separate single-line `DEPLOY_NOTE` output instead, since it's a short field.
-- Values that originate outside the step (workflow inputs, `github` context) are passed into `run:` blocks via `env:` rather than interpolated into the script body, so a quote or `$` in a commit subject or input can't become a shell metacharacter.
+- Every caller-controlled value — `inputs.*`, `vars.*`, `secrets.*`, and step outputs derived from them — is passed into `run:` blocks via `env:` rather than interpolated into the script body, so a quote or `$` in an input can't become a shell metacharacter. Three interpolations remain inside `run:` bodies on purpose: `github.token` and `runner.temp` are runner-provided, and the `legacy_peer_deps` ternary evaluates to one of two literals. Anything else appearing there is a regression.
+  - Consequence: use `"$HOME/..."` rather than `~/...` in those blocks, since `~` doesn't expand inside the quotes this style requires.
 - The Terminus session is encrypted with the machine token and cached between runs (`terminus-session.enc`) to avoid re-authenticating on every run.
 - The Pantheon clone starts async (backgrounded `&`) so it overlaps with the GitHub checkout and build steps — the workflow waits for it before rsyncing.
 - Rsync exclusions are built entirely from inputs (`DEFAULT_EXCLUSIONS` env plus the `extra_exclusions` input) — there is no `exclusions.txt` file expected in the calling repo.

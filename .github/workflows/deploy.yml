@@ -108,10 +108,12 @@ jobs:
         enableCrossOsArchive: true
 
     - name: Authenticate Terminus
+      env:
+        MACHINE_TOKEN: ${{ secrets.PANTHEON_MACHINE_TOKEN }}
       run: |
         SESSION_ENC="${{ runner.temp }}/terminus-session.enc"
         if [[ -s "$SESSION_ENC" ]]; then
-          if echo "${{ secrets.PANTHEON_MACHINE_TOKEN }}" | \
+          if echo "$MACHINE_TOKEN" | \
               openssl enc -d -aes-256-cbc -pbkdf2 -iter 10000 -pass stdin \
               -in "$SESSION_ENC" -out "$HOME/.terminus/cache/session" 2>/dev/null; then
             TERMINUS_USER=$(terminus auth:whoami 2>/dev/null || true)
@@ -122,15 +124,18 @@ jobs:
           fi
           echo "Cached session invalid, re-authenticating..."
         fi
-        terminus auth:login --machine-token="${{ secrets.PANTHEON_MACHINE_TOKEN }}"
-        echo "${{ secrets.PANTHEON_MACHINE_TOKEN }}" | \
+        terminus auth:login --machine-token="$MACHINE_TOKEN"
+        echo "$MACHINE_TOKEN" | \
           openssl enc -aes-256-cbc -salt -pbkdf2 -iter 10000 -pass stdin \
           -in "$HOME/.terminus/cache/session" \
           -out "$SESSION_ENC"
 
     - name: Check out Pantheon repository
+      env:
+        SITE_NAME: ${{ vars.PANTHEON_SITE_NAME }}
+        PANTHEON_BRANCH: ${{ inputs.pantheon_branch }}
       run: |
-        terminus local:clone ${{ vars.PANTHEON_SITE_NAME }} --branch=${{ inputs.pantheon_branch }} &
+        terminus local:clone "$SITE_NAME" --branch="$PANTHEON_BRANCH" &
         echo "PANTHEON_CLONE_PID=$!" >> "$GITHUB_ENV"
 
     # Check out the GitHub repository.
@@ -226,11 +231,14 @@ jobs:
     - name: Resolve src directory
       id: resolve-src
       if: ${{ inputs.build_frontend }}
+      env:
+        SRC_DIR: ${{ inputs.src_dir }}
+        THEME_DIR: ${{ vars.THEME_DIR }}
       run: |
-        if [ -n "${{ inputs.src_dir }}" ]; then
-          echo "path=${{ inputs.src_dir }}" >> "$GITHUB_OUTPUT"
-        elif [ -n "${{ vars.THEME_DIR }}" ]; then
-          echo "path=web/wp-content/themes/${{ vars.THEME_DIR }}/src" >> "$GITHUB_OUTPUT"
+        if [ -n "$SRC_DIR" ]; then
+          echo "path=${SRC_DIR}" >> "$GITHUB_OUTPUT"
+        elif [ -n "$THEME_DIR" ]; then
+          echo "path=web/wp-content/themes/${THEME_DIR}/src" >> "$GITHUB_OUTPUT"
         else
           echo "::error::build_frontend is true but neither src_dir input nor THEME_DIR variable is set."
           exit 1
@@ -239,8 +247,10 @@ jobs:
     - name: Determine Node version
       id: node-version
       if: ${{ inputs.build_frontend }}
+      env:
+        SRC_PATH: ${{ steps.resolve-src.outputs.path }}
       run: |
-        NVMRC="${{ steps.resolve-src.outputs.path }}/.nvmrc"
+        NVMRC="${SRC_PATH}/.nvmrc"
         if [ -f "$NVMRC" ]; then
           echo "version=$(cat "$NVMRC")" >> "$GITHUB_OUTPUT"
         else
@@ -288,35 +298,62 @@ jobs:
 
     - name: Rsync to Pantheon (web docroot)
       if: ${{ inputs.web_docroot }}
-      run: rsync -cvzrim --del --exclude-from=/tmp/exclusions.txt --exclude=wp-content/themes/${{ vars.THEME_DIR }}/src web pantheon.yml wp-cli.yml ~/pantheon-local-copies/${{ vars.PANTHEON_SITE_NAME }}
+      env:
+        SITE_NAME: ${{ vars.PANTHEON_SITE_NAME }}
+        THEME_DIR: ${{ vars.THEME_DIR }}
+      run: |
+        rsync -cvzrim --del \
+          --exclude-from=/tmp/exclusions.txt \
+          --exclude="wp-content/themes/${THEME_DIR}/src" \
+          web pantheon.yml wp-cli.yml \
+          "$HOME/pantheon-local-copies/${SITE_NAME}"
 
     - name: Rsync to Pantheon (no web docroot)
       if: ${{ !inputs.web_docroot }}
-      run: rsync -cvzrim --del --exclude-from=/tmp/exclusions.txt --exclude=wp-content/themes/${{ vars.THEME_DIR }}/src web/ ~/pantheon-local-copies/${{ vars.PANTHEON_SITE_NAME }}/
+      env:
+        SITE_NAME: ${{ vars.PANTHEON_SITE_NAME }}
+        THEME_DIR: ${{ vars.THEME_DIR }}
+      run: |
+        rsync -cvzrim --del \
+          --exclude-from=/tmp/exclusions.txt \
+          --exclude="wp-content/themes/${THEME_DIR}/src" \
+          web/ \
+          "$HOME/pantheon-local-copies/${SITE_NAME}/"
 
     - name: Commit and push changes
+      id: push-to-pantheon
       env:
         COMMIT_MESSAGE: ${{ steps.get-commit-message.outputs.COMMIT_MESSAGE }}
         GIT_USER_NAME: ${{ inputs.git_user_name }}
         GIT_USER_EMAIL: ${{ inputs.git_user_email }}
+        SITE_NAME: ${{ vars.PANTHEON_SITE_NAME }}
+        PANTHEON_BRANCH: ${{ inputs.pantheon_branch }}
       run: |
-        cd ~/pantheon-local-copies/${{ vars.PANTHEON_SITE_NAME }}
+        cd "$HOME/pantheon-local-copies/${SITE_NAME}"
         git config user.name "$GIT_USER_NAME"
         git config user.email "$GIT_USER_EMAIL"
         git add -A
         if git diff-index --quiet HEAD --; then
           echo "No changes to commit."
+          echo "pushed=false" >> "$GITHUB_OUTPUT"
         else
           git commit -m "$COMMIT_MESSAGE"
           echo "Changes committed."
-          git push origin ${{ inputs.pantheon_branch }}
+          git push origin "$PANTHEON_BRANCH"
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
         fi
 
+    # Gated on an actual push, not just the input: a run whose rsync produced no
+    # change has nothing new on Dev to promote, and promoting anyway files a
+    # Pantheon deploy record for a no-op. Workflow-only commits in the calling
+    # repo hit this every time, since only web/, pantheon.yml and wp-cli.yml are
+    # rsynced.
     - name: Push changes to Test environment
-      if: ${{ inputs.deploy_to_test }}
+      if: ${{ inputs.deploy_to_test && steps.push-to-pantheon.outputs.pushed == 'true' }}
       env:
         DEPLOY_NOTE: ${{ steps.get-commit-message.outputs.DEPLOY_NOTE }}
-      run: terminus env:deploy ${{ vars.PANTHEON_SITE_NAME }}.test --note "$DEPLOY_NOTE"
+        SITE_NAME: ${{ vars.PANTHEON_SITE_NAME }}
+      run: terminus env:deploy "${SITE_NAME}.test" --note "$DEPLOY_NOTE"
 
     # Slack notifications.
 

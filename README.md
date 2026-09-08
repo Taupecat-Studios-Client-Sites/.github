@@ -24,7 +24,7 @@ Pantheon allows one `sync_code` workflow per site at a time, so also add a `conc
 | Input | Required | Default | Description |
 |-------|----------|---------|-------------|
 | `pantheon_branch` | Yes | — | Pantheon Git branch to deploy to (e.g. `master`, `dev`) |
-| `deploy_to_test` | No | `false` | Promote to Pantheon Test after pushing to Dev |
+| `deploy_to_test` | No | `false` | Promote to Pantheon Test after pushing to Dev (skipped when the run pushed nothing) |
 | `build_frontend` | No | `true` | Run the Node/npm build step |
 | `web_docroot` | No | `true` | Whether the site uses a `web/` subdirectory as the Pantheon document root |
 | `src_dir` | No | `web/wp-content/themes/<THEME_DIR>/src` | Path to the directory containing `package.json` and optionally `.nvmrc` |
@@ -48,7 +48,7 @@ The calling repo must have the following configured:
 3. If `build_frontend` is true: detects the Node version from `.nvmrc` (falls back to `lts/*`), runs `npm ci` (optionally with `--legacy-peer-deps`) and `npm run build`.
 4. Rsyncs `web/`, `pantheon.yml`, and `wp-cli.yml` to the Pantheon local clone (into a `web/` subdirectory, or flattened to the repo root if `web_docroot` is `false`), excluding the default paths plus any listed in `extra_exclusions` and the theme `src/` directory.
 5. Commits and pushes to the Pantheon branch. The commit message is the source commit's subject plus `Source-Repo`/`Source-Ref`/`Source-Commit`/`Source-Run` git trailers, so the originating GitHub commit stays recoverable from the Pantheon side.
-6. Optionally promotes to Pantheon Test via `terminus env:deploy`.
+6. Optionally promotes to Pantheon Test via `terminus env:deploy` — only when the previous step actually pushed something, so a run with no changes doesn't file a no-op deploy record.
 7. Posts a Slack failure notification on any job failure.
 
 Deploys are serialized per Pantheon site and branch (`concurrency`), because Pantheon runs only one `sync_code` workflow per site at a time.
