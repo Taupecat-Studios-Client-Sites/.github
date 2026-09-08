@@ -1,0 +1,51 @@
+name: Update major version tag
+
+# Downstream repos pin `@v1` so they pick up fixes without tracking an unpinned
+# branch. That only works if the major alias moves forward on every release, and
+# doing it by hand is the step that gets forgotten -- so publishing a release
+# moves it here instead.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  move-major-tag:
+    runs-on: ubuntu-latest
+    # Prereleases deliberately do not move the alias consumers track.
+    if: ${{ !github.event.release.prerelease }}
+
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+
+    - name: Move major tag to this release
+      env:
+        TAG: ${{ github.event.release.tag_name }}
+      run: |
+        # The guard matters: MAJOR is derived from TAG, and the push below is a
+        # force push. Only an exact vX.Y.Z can reach it, so the target is always
+        # a bare `vN` alias and never an immutable semver tag.
+        if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "::error::Release tag '$TAG' is not vX.Y.Z, refusing to derive a major alias from it."
+          exit 1
+        fi
+
+        MAJOR="${TAG%%.*}"
+        echo "Pointing ${MAJOR} at ${TAG}"
+
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+        # ^{} dereferences an annotated tag to the commit it points at, so the
+        # alias is a lightweight tag on the same commit rather than a tag object
+        # pointing at another tag object.
+        git tag -f "$MAJOR" "${TAG}^{}"
+        git push origin "refs/tags/${MAJOR}" --force
+
+        echo "::notice::${MAJOR} now points at ${TAG}"

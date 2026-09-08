@@ -1,0 +1,50 @@
+name: Lint
+
+# Every downstream site calls deploy.yml, so a malformed expression or an
+# illegal context reference here breaks all of them at once and only shows up
+# mid-deploy. actionlint catches that statically. It also runs shellcheck over
+# the `run:` blocks (shellcheck is preinstalled on the runner), and understands
+# workflow_call inputs and the vars context.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@v6
+
+    # Pinned and fetched from the release page rather than via a third-party
+    # wrapper action, so the only trusted publisher is actionlint's own.
+    # Checksum-verified: this binary lints the workflow that holds our
+    # deploy credentials.
+    - name: Install actionlint
+      env:
+        ACTIONLINT_VERSION: "1.7.12"
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        ARCHIVE="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+        CHECKSUMS="actionlint_${ACTIONLINT_VERSION}_checksums.txt"
+
+        gh release download "v${ACTIONLINT_VERSION}" \
+          --repo rhysd/actionlint \
+          --pattern "$ARCHIVE" \
+          --pattern "$CHECKSUMS"
+
+        grep " ${ARCHIVE}\$" "$CHECKSUMS" | sha256sum --check --strict
+
+        tar xzf "$ARCHIVE" actionlint
+        ./actionlint --version
+
+    # No path argument: lints every workflow in .github/workflows, this one included.
+    - name: Run actionlint
+      run: ./actionlint -color

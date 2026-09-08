@@ -34,10 +34,32 @@ on:
         required: false
         type: boolean
         default: false
+      git_user_name:
+        description: "Name to use as the author of the commit pushed to Pantheon. Defaults to the GitHub Actions bot; provenance for the originating commit is carried in the message trailers rather than the author field."
+        required: false
+        type: string
+        default: "github-actions[bot]"
+      git_user_email:
+        description: "Email to use as the author of the commit pushed to Pantheon."
+        required: false
+        type: string
+        default: "41898282+github-actions[bot]@users.noreply.github.com"
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
+    # Pantheon runs only one sync_code workflow per site at a time, so two
+    # deploys racing to the same site and branch will fail the loser. Serialize
+    # on the pair that is actually under contention -- unrelated sites, and the
+    # same site's other branches, still deploy in parallel. Queued rather than
+    # cancelled: a run interrupted between rsync and push leaves the Pantheon
+    # working copy dirty for the next one. GitHub keeps only one run pending per
+    # group, so a burst of merges collapses to "newest wins", which is what we
+    # want from a deploy anyway.
+    concurrency:
+      group: pantheon-deploy-${{ vars.PANTHEON_SITE_NAME }}-${{ inputs.pantheon_branch }}
+      cancel-in-progress: false
 
     env:
       DEFAULT_EXCLUSIONS: |
@@ -71,11 +93,11 @@ jobs:
             "https://api.github.com/repos/pantheon-systems/terminus/releases/latest" \
             | perl -nle'print $& while m#"tag_name": "\K[^"]*#g'
         )
-        mkdir -p $HOME/terminus $HOME/.terminus/cache $HOME/.terminus/plugins
+        mkdir -p "$HOME/terminus" "$HOME/.terminus/cache" "$HOME/.terminus/plugins"
         curl -L "https://github.com/pantheon-systems/terminus/releases/download/${TERMINUS_VERSION}/terminus.phar" \
-          --output $HOME/terminus/terminus
-        chmod +x $HOME/terminus/terminus
-        sudo ln -s $HOME/terminus/terminus /usr/local/bin/terminus
+          --output "$HOME/terminus/terminus"
+        chmod +x "$HOME/terminus/terminus"
+        sudo ln -s "$HOME/terminus/terminus" /usr/local/bin/terminus
 
     - name: Restore Terminus session cache
       uses: actions/cache@v5
@@ -91,7 +113,7 @@ jobs:
         if [[ -s "$SESSION_ENC" ]]; then
           if echo "${{ secrets.PANTHEON_MACHINE_TOKEN }}" | \
               openssl enc -d -aes-256-cbc -pbkdf2 -iter 10000 -pass stdin \
-              -in "$SESSION_ENC" -out $HOME/.terminus/cache/session 2>/dev/null; then
+              -in "$SESSION_ENC" -out "$HOME/.terminus/cache/session" 2>/dev/null; then
             TERMINUS_USER=$(terminus auth:whoami 2>/dev/null || true)
             if [[ -n "$TERMINUS_USER" ]]; then
               echo "Restored Terminus session: $TERMINUS_USER"
@@ -103,29 +125,56 @@ jobs:
         terminus auth:login --machine-token="${{ secrets.PANTHEON_MACHINE_TOKEN }}"
         echo "${{ secrets.PANTHEON_MACHINE_TOKEN }}" | \
           openssl enc -aes-256-cbc -salt -pbkdf2 -iter 10000 -pass stdin \
-          -in $HOME/.terminus/cache/session \
+          -in "$HOME/.terminus/cache/session" \
           -out "$SESSION_ENC"
 
     - name: Check out Pantheon repository
       run: |
         terminus local:clone ${{ vars.PANTHEON_SITE_NAME }} --branch=${{ inputs.pantheon_branch }} &
-        echo "PANTHEON_CLONE_PID=$!" >> $GITHUB_ENV
+        echo "PANTHEON_CLONE_PID=$!" >> "$GITHUB_ENV"
 
     # Check out the GitHub repository.
 
     - name: Check out GitHub repository
       uses: actions/checkout@v6
 
-    - name: Get commit message
+    # A Pantheon repo is not a mirror of the GitHub repo -- this workflow commits
+    # a built artifact into Pantheon's own history, so the Pantheon commit's SHA
+    # does not exist on GitHub and the link back is otherwise lost. Carry the
+    # provenance as git trailers, which survive promotion to Test and Live and
+    # can be read back off the deployed commit (or from a Quicksilver hook).
+    - name: Compose Pantheon commit message
       id: get-commit-message
-      run: echo "COMMIT_MESSAGE=$(git log -1 --oneline)" >> "$GITHUB_OUTPUT"
+      env:
+        SOURCE_REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        SOURCE_REF: ${{ github.ref_name }}
+        SOURCE_COMMIT: ${{ github.sha }}
+        SOURCE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        SUBJECT=$(git log -1 --pretty=%s)
+
+        # Multi-line values need the delimiter form of $GITHUB_OUTPUT.
+        {
+          echo "COMMIT_MESSAGE<<PANTHEON_COMMIT_MSG_EOF"
+          echo "$SUBJECT"
+          echo
+          echo "Source-Repo: ${SOURCE_REPO_URL}"
+          echo "Source-Ref: ${SOURCE_REF}"
+          echo "Source-Commit: ${SOURCE_COMMIT}"
+          echo "Source-Run: ${SOURCE_RUN_URL}"
+          echo "PANTHEON_COMMIT_MSG_EOF"
+        } >> "$GITHUB_OUTPUT"
+
+        # The Pantheon deploy note is a short single-line field, so it gets the
+        # subject and the source SHA only, not the full trailer block.
+        echo "DEPLOY_NOTE=${SUBJECT} (${SOURCE_COMMIT:0:7})" >> "$GITHUB_OUTPUT"
 
     # Build the site.
 
     - name: Composer credentials
       run: |
-        echo "$AUTH_JSON" > $GITHUB_WORKSPACE/auth.json
-        echo "$ENV" > $GITHUB_WORKSPACE/.env
+        echo "$AUTH_JSON" > "$GITHUB_WORKSPACE/auth.json"
+        echo "$ENV" > "$GITHUB_WORKSPACE/.env"
       env:
         AUTH_JSON: ${{ secrets.AUTH_JSON }}
         ENV: ${{ secrets.ENV }}
@@ -179,9 +228,9 @@ jobs:
       if: ${{ inputs.build_frontend }}
       run: |
         if [ -n "${{ inputs.src_dir }}" ]; then
-          echo "path=${{ inputs.src_dir }}" >> $GITHUB_OUTPUT
+          echo "path=${{ inputs.src_dir }}" >> "$GITHUB_OUTPUT"
         elif [ -n "${{ vars.THEME_DIR }}" ]; then
-          echo "path=web/wp-content/themes/${{ vars.THEME_DIR }}/src" >> $GITHUB_OUTPUT
+          echo "path=web/wp-content/themes/${{ vars.THEME_DIR }}/src" >> "$GITHUB_OUTPUT"
         else
           echo "::error::build_frontend is true but neither src_dir input nor THEME_DIR variable is set."
           exit 1
@@ -193,9 +242,9 @@ jobs:
       run: |
         NVMRC="${{ steps.resolve-src.outputs.path }}/.nvmrc"
         if [ -f "$NVMRC" ]; then
-          echo "version=$(cat $NVMRC)" >> $GITHUB_OUTPUT
+          echo "version=$(cat "$NVMRC")" >> "$GITHUB_OUTPUT"
         else
-          echo "version=lts/*" >> $GITHUB_OUTPUT
+          echo "version=lts/*" >> "$GITHUB_OUTPUT"
         fi
 
     - name: Installing Node
@@ -218,9 +267,9 @@ jobs:
 
     - name: Wait for Pantheon clone to finish
       run: |
-        if ps -p $PANTHEON_CLONE_PID > /dev/null 2>&1; then
+        if ps -p "$PANTHEON_CLONE_PID" > /dev/null 2>&1; then
           echo "Pantheon clone is still running. Waiting..."
-          while ps -p $PANTHEON_CLONE_PID > /dev/null 2>&1; do
+          while ps -p "$PANTHEON_CLONE_PID" > /dev/null 2>&1; do
             sleep 1
           done
           echo "Pantheon clone has finished."
@@ -244,10 +293,12 @@ jobs:
     - name: Commit and push changes
       env:
         COMMIT_MESSAGE: ${{ steps.get-commit-message.outputs.COMMIT_MESSAGE }}
+        GIT_USER_NAME: ${{ inputs.git_user_name }}
+        GIT_USER_EMAIL: ${{ inputs.git_user_email }}
       run: |
         cd ~/pantheon-local-copies/${{ vars.PANTHEON_SITE_NAME }}
-        git config user.name "Tracy Rotton"
-        git config user.email "trotton@taupecatstudios.com"
+        git config user.name "$GIT_USER_NAME"
+        git config user.email "$GIT_USER_EMAIL"
         git add -A
         if git diff-index --quiet HEAD --; then
           echo "No changes to commit."
@@ -260,8 +311,8 @@ jobs:
     - name: Push changes to Test environment
       if: ${{ inputs.deploy_to_test }}
       env:
-        COMMIT_MESSAGE: ${{ steps.get-commit-message.outputs.COMMIT_MESSAGE }}
-      run: terminus env:deploy ${{ vars.PANTHEON_SITE_NAME }}.test --note "$COMMIT_MESSAGE"
+        DEPLOY_NOTE: ${{ steps.get-commit-message.outputs.DEPLOY_NOTE }}
+      run: terminus env:deploy ${{ vars.PANTHEON_SITE_NAME }}.test --note "$DEPLOY_NOTE"
 
     # Slack notifications.
 
