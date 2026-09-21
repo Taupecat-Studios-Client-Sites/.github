@@ -47,7 +47,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-26.04
+    runs-on: ubuntu-latest
 
     # Pantheon runs only one sync_code workflow per site at a time, so two
     # deploys racing to the same site and branch will fail the loser. Serialize
